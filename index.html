@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Simülasyonu</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🚁 Drone Simülasyonu</h1>
+            <p>Gerçek zamanlı drone takibi ve anomali tespiti</p>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-item">
+                <i data-lucide="radio"></i>
+                <span>Durum:</span>
+                <span class="status-value" id="statusBarStatus">Beklemede</span>
+            </div>
+            <div class="status-item">
+                <i data-lucide="zap"></i>
+                <span>Batarya:</span>
+                <span class="status-value" id="statusBarBattery">100%</span>
+            </div>
+            <div class="status-item">
+                <i data-lucide="gauge"></i>
+                <span>Hız:</span>
+                <span class="status-value" id="statusBarSpeed">0 km/h</span>
+            </div>
+            <div class="status-item">
+                <i data-lucide="trending-up"></i>
+                <span>İrtifa:</span>
+                <span class="status-value" id="statusBarAltitude">0 m</span>
+            </div>
+        </div>
+        
+        <!-- Kontrol Paneli -->
+        <div class="control-panel">
+            <div class="control-header">
+                <i data-lucide="settings"></i>
+                <h2>Kontrol Paneli</h2>
+            </div>
+            
+            <div class="control-buttons">
+                <button id="startBtn" class="btn btn-success">
+                    <i data-lucide="play"></i>
+                    Simülasyonu Başlat
+                </button>
+                <button id="stopBtn" class="btn btn-warning">
+                    <i data-lucide="pause"></i>
+                    Durdur
+                </button>
+                <button id="resetBtn" class="btn btn-secondary">
+                    <i data-lucide="refresh-cw"></i>
+                    Reset
+                </button>
+            </div>
+            
+            <div class="anomaly-section">
+                <div class="anomaly-header">
+                    <i data-lucide="alert-triangle"></i>
+                    <h3>Anomali Simülasyonları</h3>
+                </div>
+                <div class="anomaly-buttons">
+                    <button id="routeAnomalyBtn" class="btn btn-danger">
+                        <i data-lucide="map-pin"></i>
+                        Rota Değişikliği
+                    </button>
+                    <button id="altitudeAnomalyBtn" class="btn btn-danger">
+                        <i data-lucide="trending-down"></i>
+                        İrtifa Kaybı
+                    </button>
+                    <button id="speedAnomalyBtn" class="btn btn-danger">
+                        <i data-lucide="gauge"></i>
+                        Hız Düşüşü
+                    </button>
+                    <button id="normalBtn" class="btn btn-primary">
+                        <i data-lucide="check-circle"></i>
+                        Normal Moda Dön
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Harita ve Veri Paneli -->
+        <div class="main-content">
+            <!-- Harita -->
+            <div class="map-container">
+                <div class="map-header">
+                    <div class="map-title">
+                        <i data-lucide="map"></i>
+                        <h3>Drone Haritası</h3>
+                    </div>
+                </div>
+                <canvas id="droneMap" width="600" height="400"></canvas>
+            </div>
+
+            <!-- Anlık Veriler -->
+            <div class="data-panel">
+                <div class="data-header">
+                    <i data-lucide="activity"></i>
+                    <h3>Anlık Veriler</h3>
+                </div>
+                
+                <div class="data-grid">
+                    <div class="data-item">
+                        <div class="data-label">
+                            <i data-lucide="crosshair"></i>
+                            <span>Koordinat (X, Y)</span>
+                        </div>
+                        <span class="data-value" id="coordinates">0, 0</span>
+                    </div>
+                    <div class="data-item">
+                        <div class="data-label">
+                            <i data-lucide="trending-up"></i>
+                            <span>İrtifa (m)</span>
+                        </div>
+                        <span class="data-value" id="altitude">0</span>
+                    </div>
+                    <div class="data-item">
+                        <div class="data-label">
+                            <i data-lucide="gauge"></i>
+                            <span>Hız (km/h)</span>
+                        </div>
+                        <span class="data-value" id="speed">0</span>
+                    </div>
+                    <div class="data-item">
+                        <div class="data-label">
+                            <i data-lucide="navigation"></i>
+                            <span>Yön (derece)</span>
+                        </div>
+                        <span class="data-value" id="direction">0</span>
+                    </div>
+                    <div class="data-item" id="statusItem">
+                        <div class="data-label">
+                            <i data-lucide="radio"></i>
+                            <span>Durum</span>
+                        </div>
+                        <span class="data-value" id="status">Beklemede</span>
+                    </div>
+                    <div class="data-item">
+                        <div class="data-label">
+                            <i data-lucide="clock"></i>
+                            <span>Zaman</span>
+                        </div>
+                        <span class="data-value" id="timestamp">--</span>
+                    </div>
+                    <div class="data-item" id="batteryItem">
+                        <div class="data-label">
+                            <i data-lucide="zap"></i>
+                            <span>Batarya (%)</span>
+                        </div>
+                        <span class="data-value" id="battery">100</span>
+                    </div>
+                </div>
+
+                <!-- Veri Geçmişi -->
+                <div class="data-history">
+                    <div class="history-header">
+                        <i data-lucide="history"></i>
+                        <h4>Veri Geçmişi</h4>
+                    </div>
+                    <div id="dataLog"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        // Lucide iconlarını başlat
+        lucide.createIcons();
+    </script>
+</body>
+</html>
