@@ -57,6 +57,12 @@ class DroneSimulator {
         this.dataHistory = [];
         this.maxHistoryLength = 20;
 
+        // Backend Data Streaming
+        this.dataStreamer = new DroneDataStreamer(this);
+        this.httpSender = new DroneHTTPSender(this);
+        this.streamingMethod = 'websocket'; // 'websocket', 'http', or 'both'
+        this.lastDataSent = Date.now();
+
         this.initializeEventListeners();
         this.drawMap();
     }
@@ -70,6 +76,11 @@ class DroneSimulator {
         document.getElementById('altitudeAnomalyBtn').addEventListener('click', () => this.triggerAltitudeAnomaly());
         document.getElementById('speedAnomalyBtn').addEventListener('click', () => this.triggerSpeedAnomaly());
         document.getElementById('normalBtn').addEventListener('click', () => this.returnToNormal());
+        
+        // Backend streaming controls
+        document.getElementById('streamingMethod').addEventListener('change', (e) => {
+            this.setStreamingMethod(e.target.value);
+        });
     }
 
     startSimulation() {
@@ -79,10 +90,16 @@ class DroneSimulator {
         this.drone.status = 'Uçuşta';
         this.updateDisplay();
         
+        // Backend streaming başlat
+        this.startDataStreaming();
+        
         this.simulationInterval = setInterval(() => {
             this.updateDrone();
             this.updateDisplay();
             this.logData();
+            
+            // Real-time data streaming
+            this.streamDataToBackend();
         }, 100); // Her 100ms'de bir güncelle
     }
 
@@ -93,6 +110,10 @@ class DroneSimulator {
             clearInterval(this.simulationInterval);
             this.simulationInterval = null;
         }
+        
+        // Backend streaming durdur
+        this.stopDataStreaming();
+        
         this.updateDisplay();
     }
 
@@ -192,6 +213,9 @@ class DroneSimulator {
         this.anomalyDuration = 100; // 10 saniye (100 * 100ms)
         this.drone.status = 'ANOMALI: Rota Değişikliği';
         
+        // Backend'e anomali bildir
+        this.reportAnomalyToBackend('route');
+        
         // Beklenmedik hedefe yönlendir
         this.drone.targetX = Math.random() * 600;
         this.drone.targetY = Math.random() * 400;
@@ -201,29 +225,83 @@ class DroneSimulator {
         this.currentMode = 'altitude';
         this.anomalyDuration = 50; // 5 saniye
         this.drone.status = 'ANOMALI: İrtifa Kaybı';
+        
+        // Backend'e anomali bildir
+        this.reportAnomalyToBackend('altitude');
     }
 
     triggerSpeedAnomaly() {
         this.currentMode = 'speed';
         this.anomalyDuration = 80; // 8 saniye
         this.drone.status = 'ANOMALI: Hız Düşüşü';
-    }
-
-    returnToNormal() {
-        this.currentMode = 'normal';
-        this.anomalyDuration = 0;
-        this.drone.status = 'Normal Uçuş';
-        this.drone.altitude = Math.min(150, this.drone.altitude + 5);
-        this.drone.speed = Math.min(80, this.drone.speed + 5);
-        this.drone.targetX = this.originalTarget.x;
-        this.drone.targetY = this.originalTarget.y;
         
-        // Batarya seviyesi düşükse uyarı
-        if (this.drone.battery < 20) {
-            this.drone.status = 'UYARI: Düşük Batarya';
+        // Backend'e anomali bildir
+        this.reportAnomalyToBackend('speed');
+    }
+    
+    reportAnomalyToBackend(anomalyType) {
+        // WebSocket ile anomali gönder
+        if (this.streamingMethod === 'websocket' || this.streamingMethod === 'both') {
+            this.dataStreamer.sendAnomalyAlert(anomalyType, this.getAnomalySeverity(anomalyType));
+        }
+        
+        // HTTP ile anomali gönder
+        if (this.streamingMethod === 'http' || this.streamingMethod === 'both') {
+            this.httpSender.sendAnomalyHTTP(anomalyType);
+        }
+    }
+    
+    getAnomalySeverity(anomalyType) {
+        switch (anomalyType) {
+            case 'altitude': return 'high';
+            case 'route': return 'medium';
+            case 'speed': return 'low';
+            default: return 'medium';
         }
     }
 
+    startDataStreaming() {
+        switch (this.streamingMethod) {
+            case 'websocket':
+                // WebSocket zaten constructor'da başlatılıyor
+                break;
+            case 'http':
+                this.httpSender.startSending();
+                break;
+            case 'both':
+                this.httpSender.startSending();
+                break;
+        }
+        console.log(`📡 Data streaming started with method: ${this.streamingMethod}`);
+    }
+    
+    stopDataStreaming() {
+        this.httpSender.stopSending();
+        console.log('📡 Data streaming stopped');
+    }
+    
+    streamDataToBackend() {
+        const now = Date.now();
+        
+        // WebSocket için her 500ms'de bir gönder (daha sık)
+        if (this.streamingMethod === 'websocket' || this.streamingMethod === 'both') {
+            if (now - this.lastDataSent >= 500) {
+                this.dataStreamer.sendDroneData();
+                this.lastDataSent = now;
+            }
+        }
+        
+        // HTTP zaten kendi interval'ında çalışıyor
+    }
+    
+    setStreamingMethod(method) {
+        this.stopDataStreaming();
+        this.streamingMethod = method;
+        if (this.isRunning) {
+            this.startDataStreaming();
+        }
+    }
+    
     updateDisplay() {
         // Ana panel verilerini güncelle
         document.getElementById('coordinates').textContent = 
@@ -615,5 +693,414 @@ class DroneDataAPI {
                 this.simulator.triggerSpeedAnomaly();
                 break;
         }
+    }
+}
+
+// WebSocket Connection ve Real-time Data Streaming
+class DroneDataStreamer {
+    constructor(simulator) {
+        this.simulator = simulator;
+        this.websocket = null;
+        this.isConnected = false;
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 5;
+        this.connectionStatus = 'disconnected';
+        
+        // Backend URL - kendi backend URL'inizi buraya yazın
+        this.wsUrl = 'ws://localhost:8080/drone-data'; // Örnek WebSocket URL
+        
+        this.initWebSocket();
+    }
+    
+    initWebSocket() {
+        try {
+            this.websocket = new WebSocket(this.wsUrl);
+            
+            this.websocket.onopen = (event) => {
+                console.log('🚁 Drone data stream connected to backend');
+                this.isConnected = true;
+                this.connectionStatus = 'connected';
+                this.reconnectAttempts = 0;
+                this.updateConnectionStatus();
+                
+                // Bağlantı kurulduğunda initial data gönder
+                this.sendInitialData();
+            };
+            
+            this.websocket.onmessage = (event) => {
+                // Backend'den gelen mesajları işle
+                const message = JSON.parse(event.data);
+                this.handleBackendMessage(message);
+            };
+            
+            this.websocket.onclose = (event) => {
+                console.log('🔌 WebSocket connection closed');
+                this.isConnected = false;
+                this.connectionStatus = 'disconnected';
+                this.updateConnectionStatus();
+                
+                // Otomatik yeniden bağlanma
+                this.attemptReconnect();
+            };
+            
+            this.websocket.onerror = (error) => {
+                console.error('🚨 WebSocket error:', error);
+                this.connectionStatus = 'error';
+                this.updateConnectionStatus();
+            };
+            
+        } catch (error) {
+            console.error('Failed to initialize WebSocket:', error);
+            this.connectionStatus = 'error';
+            this.updateConnectionStatus();
+        }
+    }
+    
+    attemptReconnect() {
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++;
+            this.connectionStatus = 'reconnecting';
+            this.updateConnectionStatus();
+            
+            setTimeout(() => {
+                console.log(`🔄 Attempting to reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+                this.initWebSocket();
+            }, 3000 * this.reconnectAttempts); // Exponential backoff
+        }
+    }
+    
+    sendDroneData() {
+        if (!this.isConnected || !this.websocket) {
+            return false;
+        }
+        
+        const droneData = {
+            timestamp: new Date().toISOString(),
+            sessionId: this.generateSessionId(),
+            drone: {
+                id: 'DRONE_001',
+                coordinates: {
+                    x: Math.round(this.simulator.drone.x * 10) / 10,
+                    y: Math.round(this.simulator.drone.y * 10) / 10,
+                    latitude: this.convertToLatitude(this.simulator.drone.y), // Gerçek koordinatlara çevir
+                    longitude: this.convertToLongitude(this.simulator.drone.x)
+                },
+                telemetry: {
+                    altitude: Math.round(this.simulator.drone.altitude),
+                    speed: Math.round(this.simulator.drone.speed),
+                    direction: Math.round(this.simulator.drone.direction),
+                    battery: Math.round(this.simulator.drone.battery)
+                },
+                status: {
+                    mode: this.simulator.currentMode,
+                    statusText: this.simulator.drone.status,
+                    isActive: this.simulator.isRunning,
+                    hasAnomaly: this.simulator.currentMode !== 'normal'
+                },
+                target: {
+                    x: Math.round(this.simulator.drone.targetX),
+                    y: Math.round(this.simulator.drone.targetY)
+                }
+            },
+            metadata: {
+                source: 'drone-simulator',
+                version: '1.0.0',
+                dataType: 'real-time'
+            }
+        };
+        
+        try {
+            this.websocket.send(JSON.stringify(droneData));
+            return true;
+        } catch (error) {
+            console.error('Failed to send drone data:', error);
+            return false;
+        }
+    }
+    
+    sendInitialData() {
+        const initialData = {
+            type: 'connection',
+            timestamp: new Date().toISOString(),
+            drone: {
+                id: 'DRONE_001',
+                name: 'Simulation Drone',
+                type: 'quadcopter',
+                firmware: '2.1.4'
+            },
+            session: {
+                id: this.generateSessionId(),
+                startTime: new Date().toISOString(),
+                simulator: true
+            }
+        };
+        
+        if (this.isConnected) {
+            this.websocket.send(JSON.stringify(initialData));
+        }
+    }
+    
+    sendAnomalyAlert(anomalyType, severity = 'medium') {
+        if (!this.isConnected) return;
+        
+        const anomalyData = {
+            type: 'anomaly_alert',
+            timestamp: new Date().toISOString(),
+            anomaly: {
+                type: anomalyType,
+                severity: severity,
+                description: this.simulator.drone.status,
+                droneId: 'DRONE_001'
+            },
+            coordinates: {
+                x: this.simulator.drone.x,
+                y: this.simulator.drone.y,
+                latitude: this.convertToLatitude(this.simulator.drone.y),
+                longitude: this.convertToLongitude(this.simulator.drone.x)
+            }
+        };
+        
+        this.websocket.send(JSON.stringify(anomalyData));
+    }
+    
+    handleBackendMessage(message) {
+        switch (message.type) {
+            case 'command':
+                this.handleDroneCommand(message.command);
+                break;
+            case 'config_update':
+                this.handleConfigUpdate(message.config);
+                break;
+            case 'ping':
+                this.sendPong();
+                break;
+            default:
+                console.log('Unknown message type:', message.type);
+        }
+    }
+    
+    handleDroneCommand(command) {
+        switch (command.action) {
+            case 'start':
+                this.simulator.startSimulation();
+                break;
+            case 'stop':
+                this.simulator.stopSimulation();
+                break;
+            case 'reset':
+                this.simulator.resetSimulation();
+                break;
+            case 'trigger_anomaly':
+                this.simulator.triggerAnomaly(command.anomaly_type);
+                break;
+            case 'set_target':
+                this.simulator.drone.targetX = command.target.x;
+                this.simulator.drone.targetY = command.target.y;
+                break;
+        }
+    }
+    
+    sendPong() {
+        if (this.isConnected) {
+            this.websocket.send(JSON.stringify({
+                type: 'pong',
+                timestamp: new Date().toISOString()
+            }));
+        }
+    }
+    
+    convertToLatitude(y) {
+        // Canvas Y koordinatını gerçek latitude'a çevir (İstanbul bölgesi)
+        const minLat = 40.9000;
+        const maxLat = 41.2000;
+        return minLat + (y / 400) * (maxLat - minLat);
+    }
+    
+    convertToLongitude(x) {
+        // Canvas X koordinatını gerçek longitude'a çevir (İstanbul bölgesi)
+        const minLng = 28.8000;
+        const maxLng = 29.2000;
+        return minLng + (x / 600) * (maxLng - minLng);
+    }
+    
+    generateSessionId() {
+        return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    }
+    
+    updateConnectionStatus() {
+        // UI'da bağlantı durumunu güncelle
+        const statusElement = document.getElementById('connectionStatus');
+        if (statusElement) {
+            statusElement.textContent = this.connectionStatus.toUpperCase();
+            statusElement.className = `connection-status ${this.connectionStatus}`;
+        }
+        
+        // Status bar'da göster
+        const wsStatusElement = document.getElementById('wsStatus');
+        if (wsStatusElement) {
+            wsStatusElement.textContent = this.isConnected ? 'ONLINE' : 'OFFLINE';
+        }
+    }
+    
+    disconnect() {
+        if (this.websocket) {
+            this.websocket.close();
+            this.isConnected = false;
+        }
+    }
+}
+
+// HTTP REST API Data Sender
+class DroneHTTPSender {
+    constructor(simulator) {
+        this.simulator = simulator;
+        this.apiBaseUrl = 'http://localhost:3000/api'; // Backend API URL'inizi buraya yazın
+        this.sendInterval = 1000; // 1 saniyede bir gönder
+        this.intervalId = null;
+        this.isActive = false;
+        this.requestQueue = [];
+        this.maxQueueSize = 100;
+    }
+    
+    startSending() {
+        if (this.isActive) return;
+        
+        this.isActive = true;
+        this.intervalId = setInterval(() => {
+            this.sendDroneDataHTTP();
+        }, this.sendInterval);
+        
+        console.log('📡 HTTP data sending started');
+    }
+    
+    stopSending() {
+        if (this.intervalId) {
+            clearInterval(this.intervalId);
+            this.intervalId = null;
+        }
+        this.isActive = false;
+        console.log('📡 HTTP data sending stopped');
+    }
+    
+    async sendDroneDataHTTP() {
+        const droneData = {
+            timestamp: new Date().toISOString(),
+            droneId: 'DRONE_001',
+            coordinates: {
+                x: this.simulator.drone.x,
+                y: this.simulator.drone.y,
+                latitude: this.convertToLatitude(this.simulator.drone.y),
+                longitude: this.convertToLongitude(this.simulator.drone.x)
+            },
+            telemetry: {
+                altitude: this.simulator.drone.altitude,
+                speed: this.simulator.drone.speed,
+                direction: this.simulator.drone.direction,
+                battery: this.simulator.drone.battery
+            },
+            status: {
+                mode: this.simulator.currentMode,
+                statusText: this.simulator.drone.status,
+                isActive: this.simulator.isRunning
+            }
+        };
+        
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/drone-data`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer YOUR_API_TOKEN', // Gerekirse API token
+                },
+                body: JSON.stringify(droneData)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            console.log('✅ Data sent successfully:', result);
+            
+        } catch (error) {
+            console.error('❌ Failed to send data:', error);
+            this.queueFailedRequest(droneData);
+        }
+    }
+    
+    async sendAnomalyHTTP(anomalyType) {
+        const anomalyData = {
+            timestamp: new Date().toISOString(),
+            droneId: 'DRONE_001',
+            anomaly: {
+                type: anomalyType,
+                severity: this.calculateSeverity(anomalyType),
+                description: this.simulator.drone.status
+            },
+            coordinates: {
+                x: this.simulator.drone.x,
+                y: this.simulator.drone.y,
+                latitude: this.convertToLatitude(this.simulator.drone.y),
+                longitude: this.convertToLongitude(this.simulator.drone.x)
+            }
+        };
+        
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/anomalies`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer YOUR_API_TOKEN',
+                },
+                body: JSON.stringify(anomalyData)
+            });
+            
+            if (response.ok) {
+                console.log('🚨 Anomaly reported successfully');
+            }
+            
+        } catch (error) {
+            console.error('❌ Failed to report anomaly:', error);
+        }
+    }
+    
+    queueFailedRequest(data) {
+        if (this.requestQueue.length >= this.maxQueueSize) {
+            this.requestQueue.shift(); // En eski request'i çıkar
+        }
+        this.requestQueue.push(data);
+    }
+    
+    async retryFailedRequests() {
+        while (this.requestQueue.length > 0) {
+            const data = this.requestQueue.shift();
+            try {
+                await this.sendSingleRequest(data);
+            } catch (error) {
+                this.requestQueue.unshift(data); // Tekrar başa ekle
+                break;
+            }
+        }
+    }
+    
+    calculateSeverity(anomalyType) {
+        switch (anomalyType) {
+            case 'altitude': return 'high';
+            case 'route': return 'medium';
+            case 'speed': return 'low';
+            default: return 'medium';
+        }
+    }
+    
+    convertToLatitude(y) {
+        const minLat = 40.9000;
+        const maxLat = 41.2000;
+        return minLat + (y / 400) * (maxLat - minLat);
+    }
+    
+    convertToLongitude(x) {
+        const minLng = 28.8000;
+        const maxLng = 29.2000;
+        return minLng + (x / 600) * (maxLng - minLng);
     }
 }

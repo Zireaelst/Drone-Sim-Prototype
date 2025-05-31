@@ -38,6 +38,11 @@
                 <span>İrtifa:</span>
                 <span class="status-value" id="statusBarAltitude">0 m</span>
             </div>
+            <div class="status-item">
+                <i data-lucide="wifi"></i>
+                <span>Backend:</span>
+                <span class="status-value" id="wsStatus">OFFLINE</span>
+            </div>
         </div>
         
         <!-- Kontrol Paneli -->
@@ -84,6 +89,22 @@
                         <i data-lucide="check-circle"></i>
                         Normal Moda Dön
                     </button>
+                </div>
+                
+                <!-- Backend Streaming Controls -->
+                <div class="streaming-section">
+                    <div class="streaming-header">
+                        <i data-lucide="server"></i>
+                        <h3>Backend Streaming</h3>
+                    </div>
+                    <div class="streaming-controls">
+                        <select id="streamingMethod" class="streaming-select">
+                            <option value="websocket">WebSocket (Real-time)</option>
+                            <option value="http">HTTP (Periodic)</option>
+                            <option value="both">Both Methods</option>
+                        </select>
+                        <span class="connection-status" id="connectionStatus">DISCONNECTED</span>
+                    </div>
                 </div>
             </div>
         </div>
